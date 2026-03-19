@@ -63,6 +63,7 @@ Rscript -e 'shiny::runApp("qre_shiny_app.R")'
 # Or open qre_learning_notebook.Rmd in RStudio
 ```
 
-## Author
+## Authors
 
-Brad LeVeck, UC Merced
+- **Brad LeVeck**, UC Merced — QRE solver, smooth fictitious play simulator, volunteer's dilemma solver
+- **Claude** (Anthropic) — Shiny app, RMarkdown notebook, documentation

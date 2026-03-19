@@ -1,0 +1,327 @@
+---
+title: "QRE and Noisy Learning Simulations"
+subtitle: "POLI 215 — Week 9"
+author: "Brad LeVeck"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    theme: flatly
+    code_folding: show
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo = TRUE, message = FALSE, warning = FALSE,
+  fig.width = 8, fig.height = 5
+)
+set.seed(215)
+```
+
+# 1. The Logit Quantal Response Function
+
+In Nash equilibrium, players *best respond* — they always choose the action with the highest expected payoff. QRE relaxes this: players *better respond*, choosing higher-payoff actions more often but not always.
+
+The **logit quantal response function** maps a payoff difference to a choice probability:
+
+$$\Pr(A) = \frac{1}{1 + e^{-\lambda (Eu(A) - Eu(B))}}$$
+
+where $\lambda > 0$ is the **precision parameter**.
+
+```{r logit-function}
+logit <- function(x) 1 / (1 + exp(-x))
+```
+
+## How $\lambda$ shapes behavior
+
+```{r lambda-plot, fig.cap="Logit quantal response function for different values of lambda."}
+curve(logit(0.5 * x), from = -10, to = 10, n = 500,
+      xlab = "Eu(A) - Eu(B)", ylab = "Pr(A)",
+      main = "Logit Quantal Response Function",
+      col = "gray80", lwd = 2, ylim = c(0, 1))
+curve(logit(1 * x),  add = TRUE, col = "gray60", lwd = 2)
+curve(logit(2 * x),  add = TRUE, col = "gray40", lwd = 2)
+curve(logit(5 * x),  add = TRUE, col = "gray20", lwd = 2)
+curve(logit(20 * x), add = TRUE, col = "black",  lwd = 2)
+abline(h = 0.5, lty = 3, col = "gray")
+abline(v = 0,   lty = 3, col = "gray")
+legend("bottomright",
+       legend = c(expression(lambda == 0.5),
+                  expression(lambda == 1),
+                  expression(lambda == 2),
+                  expression(lambda == 5),
+                  expression(lambda == 20)),
+       col = c("gray80", "gray60", "gray40", "gray20", "black"),
+       lwd = 2, bty = "n")
+```
+
+**Try it yourself:** Change the $\lambda$ values in the plot above. What happens as $\lambda \to 0$? As $\lambda \to \infty$?
+
+Key observations:
+
+- All curves pass through $(0,\ 0.5)$: when indifferent, the player randomizes equally.
+- Higher $\lambda$ = more responsive to payoff differences (approaches the step function = best response).
+- Lower $\lambda$ = flatter curve (approaches $0.5$ everywhere = random play).
+
+# 2. QRE Solver for 2×2 Games
+
+We need a function that finds the QRE fixed point: the pair $(p, q)$ where each player's mixing probability equals their logit quantal response to the other's strategy.
+
+```{r qre-solver}
+qre_2x2 <- function(A, B, lambda, start = c(0.5, 0.5)) {
+  obj <- function(z) {
+    p <- logit(z[1])   # Pr(Row plays action 1)
+    q <- logit(z[2])   # Pr(Column plays action 1)
+
+    # Row's expected payoffs
+    ur1 <- A[1,1] * q + A[1,2] * (1 - q)
+    ur2 <- A[2,1] * q + A[2,2] * (1 - q)
+
+    # Column's expected payoffs
+    uc1 <- B[1,1] * p + B[2,1] * (1 - p)
+    uc2 <- B[1,2] * p + B[2,2] * (1 - p)
+
+    # QRE conditions: p = logit(lambda * payoff diff)
+    br_p <- logit(lambda * (ur1 - ur2))
+    br_q <- logit(lambda * (uc1 - uc2))
+
+    # Minimize squared deviation from fixed-point conditions
+    (p - br_p)^2 + (q - br_q)^2
+  }
+
+  fit <- optim(qlogis(start), obj)
+  c(p = logit(fit$par[1]), q = logit(fit$par[2]))
+}
+```
+
+**How it works:**
+
+1. The optimizer searches over unconstrained log-odds space (via `qlogis`).
+2. For each candidate $(p, q)$, it computes the logit best response and checks how far $(p, q)$ is from the QRE fixed-point condition.
+3. At the solution, `p = logit(lambda * (ur1 - ur2))` and `q = logit(lambda * (uc1 - uc2))` — both conditions hold simultaneously.
+
+# 3. The Game: Asymmetric Matching Pennies
+
+```{r game-setup}
+A <- matrix(c(
+   2, -2,
+  -1,  1
+), nrow = 2, byrow = TRUE)
+
+B <- -A  # Zero-sum
+
+rownames(A) <- rownames(B) <- c("R1", "R2")
+colnames(A) <- colnames(B) <- c("C1", "C2")
+
+cat("Row's payoff matrix (A):\n")
+print(A)
+cat("\nColumn's payoff matrix (B):\n")
+print(B)
+```
+
+**Nash equilibrium:** $p = 1/3$, $q = 1/2$.
+
+```{r qre-across-lambda}
+lambdas <- c(0.5, 1, 2, 5, 10, 50)
+results <- t(sapply(lambdas, function(lam) qre_2x2(A, B, lambda = lam)))
+results <- data.frame(lambda = lambdas, p = results[,1], q = results[,2])
+
+cat("QRE predictions across lambda values:\n")
+cat(sprintf("%-10s %-20s %-20s\n", "lambda", "p (Row plays R1)", "q (Col plays C1)"))
+cat(strrep("-", 50), "\n")
+for (i in seq_len(nrow(results))) {
+  cat(sprintf("%-10.1f %-20.4f %-20.4f\n",
+              results$lambda[i], results$p[i], results$q[i]))
+}
+cat(sprintf("%-10s %-20s %-20s\n", "Nash", "0.3333", "0.5000"))
+```
+
+**Try it yourself:** Add more $\lambda$ values to the `lambdas` vector. At what $\lambda$ does the QRE become nearly indistinguishable from Nash?
+
+# 4. Smooth Fictitious Play: Learning Converges to QRE
+
+Now the key point: QRE need not be a model of strategic thinking. It can emerge from a simple **learning process**.
+
+## The learning algorithm
+
+Each round:
+
+1. Players hold beliefs about the opponent's strategy (based on history).
+2. They compute a **logit quantal response** to those beliefs (not a best response).
+3. A population of $N$ agents independently draws actions from this probability.
+4. Beliefs update via **exponential smoothing**: $\hat{p}_{t+1} = (1-\alpha)\hat{p}_t + \alpha \cdot \text{observed play}$.
+
+```{r sfp-simulator}
+simulate_sfp_2x2 <- function(A, B, lambda = 2, alpha = 0.05,
+                             T = 3000, N = 400,
+                             p0 = 0.9, q0 = 0.1) {
+
+  phat <- p0   # Column's belief about Row playing action 1
+  qhat <- q0   # Row's belief about Column playing action 1
+
+  out <- data.frame(
+    t = 1:T,
+    p_play = NA_real_,
+    q_play = NA_real_,
+    phat = NA_real_,
+    qhat = NA_real_
+  )
+
+  for (t in 1:T) {
+    # Expected payoff differences given current beliefs
+    ur1 <- A[1,1] * qhat + A[1,2] * (1 - qhat)
+    ur2 <- A[2,1] * qhat + A[2,2] * (1 - qhat)
+
+    uc1 <- B[1,1] * phat + B[2,1] * (1 - phat)
+    uc2 <- B[1,2] * phat + B[2,2] * (1 - phat)
+
+    # Logit choice probabilities
+    pr <- logit(lambda * (ur1 - ur2))
+    pc <- logit(lambda * (uc1 - uc2))
+
+    # Population of N agents each draw an action
+    p_play <- mean(rbinom(N, 1, pr))
+    q_play <- mean(rbinom(N, 1, pc))
+
+    # Exponential smoothing of beliefs
+    phat <- (1 - alpha) * phat + alpha * p_play
+    qhat <- (1 - alpha) * qhat + alpha * q_play
+
+    out[t, ] <- c(t, p_play, q_play, phat, qhat)
+  }
+
+  out
+}
+```
+
+## Running the simulation
+
+```{r run-sim}
+lambda <- 2
+qre <- qre_2x2(A, B, lambda = lambda)
+sim  <- simulate_sfp_2x2(A, B, lambda = lambda, alpha = 0.05,
+                          T = 3000, N = 400, p0 = 0.9, q0 = 0.1)
+
+# Compute running averages
+sim$run_p <- cumsum(sim$p_play) / sim$t
+sim$run_q <- cumsum(sim$q_play) / sim$t
+```
+
+## Results: convergence to QRE
+
+```{r convergence-plots, fig.height=5, fig.width=10, fig.cap="Running averages of play converge to QRE (dashed), not Nash (dotted)."}
+par(mfrow = c(1, 2), mar = c(4, 4, 3, 1))
+
+# Row player
+plot(sim$t, sim$run_p, type = "l", ylim = c(0, 1), col = "steelblue", lwd = 2,
+     xlab = "Round (t)", ylab = expression("Row: Pr(" * R[1] * ")"),
+     main = "Row Player")
+abline(h = qre["p"], lty = 2, col = "red", lwd = 1.5)
+abline(h = 1/3,      lty = 3, col = "gray50", lwd = 1.5)
+legend("topright",
+       legend = c("Running avg", sprintf("QRE (%.3f)", qre["p"]), "Nash (0.333)"),
+       col = c("steelblue", "red", "gray50"),
+       lty = c(1, 2, 3), lwd = c(2, 1.5, 1.5), bty = "n", cex = 0.9)
+
+# Column player
+plot(sim$t, sim$run_q, type = "l", ylim = c(0, 1), col = "steelblue", lwd = 2,
+     xlab = "Round (t)", ylab = expression("Column: Pr(" * C[1] * ")"),
+     main = "Column Player")
+abline(h = qre["q"], lty = 2, col = "red", lwd = 1.5)
+abline(h = 0.5,      lty = 3, col = "gray50", lwd = 1.5)
+legend("topright",
+       legend = c("Running avg", sprintf("QRE (%.3f)", qre["q"]), "Nash (0.500)"),
+       col = c("steelblue", "red", "gray50"),
+       lty = c(1, 2, 3), lwd = c(2, 1.5, 1.5), bty = "n", cex = 0.9)
+```
+
+The running averages converge to the **QRE**, not to Nash. The learning process — where agents noisily best-respond to observed history — produces QRE as its long-run outcome.
+
+# 5. Exercises: Explore the Parameters
+
+Use the code above to investigate the following questions.
+
+## 5.1. Change $\lambda$
+
+**Question:** What happens when you increase $\lambda$ to 10? To 50? What about $\lambda = 0.1$?
+
+```{r exercise-lambda, eval=FALSE}
+# Try changing lambda here
+lambda_new <- 10  # <-- change this value
+qre_new <- qre_2x2(A, B, lambda = lambda_new)
+sim_new <- simulate_sfp_2x2(A, B, lambda = lambda_new, alpha = 0.05,
+                             T = 3000, N = 400, p0 = 0.9, q0 = 0.1)
+sim_new$run_p <- cumsum(sim_new$p_play) / sim_new$t
+sim_new$run_q <- cumsum(sim_new$q_play) / sim_new$t
+
+par(mfrow = c(1, 2))
+plot(sim_new$t, sim_new$run_p, type = "l", ylim = c(0,1),
+     xlab = "t", ylab = "Row: Pr(R1)", main = paste("lambda =", lambda_new))
+abline(h = qre_new["p"], lty = 2, col = "red")
+abline(h = 1/3, lty = 3, col = "gray50")
+
+plot(sim_new$t, sim_new$run_q, type = "l", ylim = c(0,1),
+     xlab = "t", ylab = "Column: Pr(C1)", main = paste("lambda =", lambda_new))
+abline(h = qre_new["q"], lty = 2, col = "red")
+abline(h = 0.5, lty = 3, col = "gray50")
+```
+
+## 5.2. Change the learning rate $\alpha$
+
+**Question:** What happens with `alpha = 0.5` (fast learning) vs. `alpha = 0.01` (very slow learning)? Does the learning rate affect *where* play converges, or just *how fast*?
+
+```{r exercise-alpha, eval=FALSE}
+# Try different learning rates
+sim_fast <- simulate_sfp_2x2(A, B, lambda = 2, alpha = 0.5,
+                              T = 3000, N = 400, p0 = 0.9, q0 = 0.1)
+sim_slow <- simulate_sfp_2x2(A, B, lambda = 2, alpha = 0.01,
+                              T = 3000, N = 400, p0 = 0.9, q0 = 0.1)
+sim_fast$run_p <- cumsum(sim_fast$p_play) / sim_fast$t
+sim_slow$run_p <- cumsum(sim_slow$p_play) / sim_slow$t
+
+plot(sim_fast$t, sim_fast$run_p, type = "l", ylim = c(0,1),
+     col = "steelblue", xlab = "t", ylab = "Row: Pr(R1)",
+     main = "Effect of learning rate")
+lines(sim_slow$t, sim_slow$run_p, col = "darkorange")
+abline(h = qre["p"], lty = 2, col = "red")
+legend("topright", legend = c("alpha = 0.5", "alpha = 0.01"),
+       col = c("steelblue", "darkorange"), lwd = 2, bty = "n")
+```
+
+## 5.3. Change starting beliefs
+
+**Question:** What if starting beliefs are already at Nash? At the QRE? At $(0.5, 0.5)$? Does the long-run outcome change?
+
+```{r exercise-start, eval=FALSE}
+# Try different starting beliefs
+sim_a <- simulate_sfp_2x2(A, B, lambda = 2, p0 = 1/3, q0 = 0.5)   # start at Nash
+sim_b <- simulate_sfp_2x2(A, B, lambda = 2, p0 = 0.5, q0 = 0.5)   # start at 50/50
+sim_c <- simulate_sfp_2x2(A, B, lambda = 2, p0 = 0.1, q0 = 0.9)   # start opposite
+
+# Plot and compare — do they all converge to the same place?
+```
+
+## 5.4. Change the game
+
+**Question:** Try the standard (symmetric) matching pennies game: $A = \begin{pmatrix} 1 & -1 \\ -1 & 1 \end{pmatrix}$, $B = -A$. What is the Nash equilibrium? The QRE? Do they coincide?
+
+```{r exercise-game, eval=FALSE}
+A_sym <- matrix(c(1, -1, -1, 1), nrow = 2, byrow = TRUE)
+B_sym <- -A_sym
+
+qre_sym <- qre_2x2(A_sym, B_sym, lambda = 2)
+cat("Symmetric MP — QRE:", qre_sym, "\n")
+cat("Symmetric MP — Nash: p = 0.5, q = 0.5\n")
+# Why are they the same?
+```
+
+# 6. Summary
+
+| Concept | What it is | Long-run outcome |
+|---------|-----------|-----------------|
+| Best response dynamics | Players perfectly best-respond to history | Converges to Nash (when it converges) |
+| Fictitious play | Best respond to full empirical history | Converges to Nash |
+| **Smooth fictitious play** | **Logit better-respond to history** | **Converges to QRE** |
+
+The QRE is to smooth fictitious play what Nash is to standard fictitious play.

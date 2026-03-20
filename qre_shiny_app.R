@@ -58,11 +58,6 @@ games <- list(
     A = matrix(c(9, 0, 0, 1), 2, byrow = TRUE),
     B = matrix(c(0, 1, 1, 0), 2, byrow = TRUE),
     nash_p = 0.5, nash_q = 0.1
-  ),
-  "Chicken" = list(
-    A = matrix(c(0, 5, 2, 4), 2, byrow = TRUE),
-    B = matrix(c(0, 2, 5, 4), 2, byrow = TRUE),
-    nash_p = 1/3, nash_q = 1/3
   )
 )
 
